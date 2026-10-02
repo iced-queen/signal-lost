@@ -1,4 +1,7 @@
 import { renderHome, renderLobby, renderMission, renderResult, timeLabel } from './render.js';
+import { StationAudio } from './audio.js';
+import { installKnobControls, updateFrequency } from './controls.js';
+import { resetDrafts } from './drafts.js';
 
 const app = document.querySelector('#app');
 const connectionLabel = document.querySelector('#connection');
@@ -21,6 +24,10 @@ let profile = readStorage(localStorage, 'signal-profile', { name: '', wins: 0, c
 const invite = new URL(location.href).searchParams.get('room')?.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 6) ?? '';
 const connectionDraft = { name: profile.name, code: invite };
 let channelMode = invite ? 'join' : 'create';
+let savedNotes = readStorage(sessionStorage, 'signal-notes', null, (value) =>
+  value && typeof value.missionId === 'string' && typeof value.text === 'string' && value.text.length <= 2000);
+const audio = new StationAudio(notify);
+let lastCueId = null;
 
 function notify(text) {
   notice.querySelector('span').textContent = text;
@@ -57,7 +64,8 @@ function draw(force = false) {
   if (force || signature !== renderKey) {
     const active = document.activeElement;
     const focusId = active?.id;
-    const selection = active instanceof HTMLInputElement && active.type === 'text' ? [active.selectionStart, active.selectionEnd] : null;
+    const textControl = active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement && active.type === 'text';
+    const selection = textControl ? [active.selectionStart, active.selectionEnd] : null;
     app.innerHTML = !state ? renderHome({ name: connectionDraft.name, invite: connectionDraft.code, stats: profile, mode: channelMode })
       : !state.mission ? renderLobby(state)
         : state.mission.phase === 'playing' ? renderMission(state, manualTab, inputs)
@@ -65,8 +73,12 @@ function draw(force = false) {
     renderKey = signature;
     const next = focusId ? document.getElementById(focusId) : null;
     if (next) {
-      next.focus({ preventScroll: true });
-      if (selection && next instanceof HTMLInputElement) next.setSelectionRange(...selection);
+      const target = next.matches(':disabled')
+        ? next.closest('fieldset')?.querySelector('button:enabled, input:enabled, [role="slider"][aria-disabled="false"]')
+          ?? document.getElementById('back-to-bench')
+        : next;
+      target?.focus({ preventScroll: true });
+      if (selection && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) target.setSelectionRange(...selection);
     }
   }
   const timer = document.querySelector('#mission-timer');
@@ -75,7 +87,18 @@ function draw(force = false) {
     timer.classList.toggle('urgent', state.mission.remaining !== null && state.mission.remaining <= 60);
   }
   app.classList.toggle('transport-offline', socket?.readyState !== WebSocket.OPEN);
-  for (const fieldset of app.querySelectorAll('fieldset')) fieldset.disabled = state?.paused || socket?.readyState !== WebSocket.OPEN;
+  for (const fieldset of app.querySelectorAll('fieldset')) fieldset.disabled = fieldset.dataset.locked === 'true' || state?.paused || socket?.readyState !== WebSocket.OPEN;
+  for (const knob of app.querySelectorAll('[data-knob]')) {
+    const disabled = knob.closest('fieldset').disabled;
+    knob.setAttribute('aria-disabled', String(disabled));
+    knob.tabIndex = disabled ? -1 : 0;
+  }
+  const audioButton = document.querySelector('#audio-toggle');
+  if (audioButton) {
+    audioButton.textContent = audio.enabled ? 'Audio on' : 'Audio off';
+    audioButton.setAttribute('aria-pressed', String(audio.enabled));
+  }
+  audio.setScene(state?.mission?.phase === 'playing' && !state.paused && socket?.readyState === WebSocket.OPEN);
   const pauseBanner = document.querySelector('#pause-banner');
   if (pauseBanner) {
     const offline = socket?.readyState !== WebSocket.OPEN;
@@ -92,13 +115,21 @@ function transmit(message) {
   return true;
 }
 
+function sendAction(moduleId, value) {
+  const module = state?.mission?.modules?.find((item) => item.id === moduleId);
+  if (!module) { notify('The equipment view has changed. Step back and inspect the device again.'); return; }
+  transmit({ type: 'action', missionId: state.mission.id, moduleId, stage: module.stage, value });
+}
+
 function clearSession() {
   savedSession = null;
   state = null;
   pending = false;
   submittingSession = false;
   writeStorage(sessionStorage, 'signal-session', null);
-  for (const key of Object.keys(inputs)) delete inputs[key];
+  savedNotes = null;
+  writeStorage(sessionStorage, 'signal-notes', null);
+  resetDrafts(inputs);
   draw(true);
 }
 
@@ -128,13 +159,20 @@ function connect() {
       pending = false;
       notice.hidden = true;
     } else if (message.type === 'state') {
-      if (message.mission?.id !== state?.mission?.id) for (const key of Object.keys(inputs)) delete inputs[key];
+      if (message.mission?.id !== state?.mission?.id) {
+        resetDrafts(inputs, message.mission?.id, savedNotes);
+        lastCueId = null;
+      }
       state = message;
       pending = false;
       if (state.mission?.phase === 'won' && !profile.completed.includes(state.mission.id)) {
         profile.wins++;
         profile.completed = [...profile.completed.slice(-99), state.mission.id];
         writeStorage(localStorage, 'signal-profile', profile);
+      }
+      if (state.mission?.feedback?.id !== lastCueId) {
+        lastCueId = state.mission?.feedback?.id ?? null;
+        if (state.mission?.feedback?.cue) audio.play(state.mission.phase === 'won' ? 'broadcast' : state.mission.feedback.cue);
       }
       draw();
     } else if (message.type === 'error') {
@@ -202,36 +240,47 @@ app.addEventListener('submit', (event) => {
     }
   } else if (form.dataset.pulse) {
     if (state?.paused) return;
-    transmit({ type: 'action', moduleId: form.dataset.pulse, value: form.elements.digits.value });
+    sendAction(form.dataset.pulse, form.elements.digits.value);
   }
 });
 
 app.addEventListener('input', (event) => {
   const input = event.target;
+  if (input instanceof HTMLTextAreaElement && input.id === 'analyst-notes') {
+    inputs.notes = input.value;
+    savedNotes = { missionId: state.mission.id, text: input.value };
+    writeStorage(sessionStorage, 'signal-notes', savedNotes);
+    return;
+  }
   if (!(input instanceof HTMLInputElement)) return;
   if (input.id === 'room-code') input.value = input.value.toUpperCase().replace(/[^A-Z2-9]/g, '');
   if (input.id === 'room-code') connectionDraft.code = input.value;
   if (input.id === 'player-name') connectionDraft.name = input.value;
-  if (input.dataset.dial) {
-    inputs[input.dataset.dial] = Number(input.value);
-    document.getElementById(`output-${input.dataset.dial}`).textContent = (Number(input.value) / 10).toFixed(1);
-  }
   if (input.name === 'digits') inputs[input.closest('form').dataset.pulse] = input.value;
 });
 
 app.addEventListener('click', async (event) => {
   const button = event.target.closest('button');
   if (!button || button.disabled) return;
+  if (!button.hasAttribute('data-audio')) audio.play(button.dataset.action === 'wire' ? 'cut' : 'switch');
   if (button.dataset.mode) {
     channelMode = button.dataset.mode;
     draw(true);
     app.querySelector(`[data-mode="${channelMode}"]`)?.focus({ preventScroll: true });
+  } else if (button.hasAttribute('data-audio')) {
+    await audio.toggle();
+    draw();
+  } else if (button.hasAttribute('data-inspect')) {
+    transmit({ type: 'inspect', missionId: state.mission.id, moduleId: button.dataset.inspect || null });
   } else if (button.dataset.command) transmit({ type: button.dataset.command });
   else if (button.dataset.difficulty) transmit({ type: 'difficulty', value: button.dataset.difficulty });
   else if (button.dataset.manual) {
     manualTab = button.dataset.manual;
     draw(true);
-    app.querySelector(`[data-manual="${manualTab}"]`)?.focus({ preventScroll: true });
+    app.querySelector(`.reference-desk [data-manual="${manualTab}"]`)?.focus({ preventScroll: true });
+    if (matchMedia('(max-width: 740px)').matches) {
+      app.querySelector('.reference-desk').scrollIntoView({ block: 'start', behavior: 'instant' });
+    }
   } else if (button.hasAttribute('data-copy')) {
     const url = new URL(location.href);
     url.search = '';
@@ -245,17 +294,24 @@ app.addEventListener('click', async (event) => {
     }
   } else if (button.dataset.step) {
     const id = button.dataset.module;
-    const slider = document.getElementById(`dial-${id}`);
-    const value = Math.max(880, Math.min(960, Number(slider.value) + Number(button.dataset.step)));
-    slider.value = value;
-    inputs[id] = value;
-    document.getElementById(`output-${id}`).textContent = (value / 10).toFixed(1);
+    const knob = document.getElementById(`knob-${id}`);
+    updateFrequency(app, inputs, id, Number(knob.getAttribute('aria-valuenow')) + Number(button.dataset.step));
+  } else if (button.dataset.bandwidth) {
+    inputs[`${button.dataset.module}:bandwidth`] = button.dataset.bandwidth;
+    for (const option of button.closest('.bandwidth-switch').querySelectorAll('button')) {
+      const selected = option === button;
+      option.classList.toggle('selected', selected);
+      option.setAttribute('aria-pressed', String(selected));
+    }
   } else if (button.dataset.action) {
     if (state?.paused) return;
-    const value = button.dataset.action === 'wire' ? Number(button.dataset.value)
-      : button.dataset.action === 'glyph' ? button.dataset.value
-        : Number(document.getElementById(`dial-${button.dataset.module}`).value);
-    transmit({ type: 'action', moduleId: button.dataset.module, value });
+    const id = button.dataset.module;
+    const value = ['wire', 'align'].includes(button.dataset.action) ? Number(button.dataset.value)
+      : button.dataset.action === 'frequency' ? {
+        frequency: Number(document.getElementById(`knob-${id}`).getAttribute('aria-valuenow')),
+        bandwidth: inputs[`${id}:bandwidth`] ?? 'narrow',
+      } : button.dataset.value;
+    sendAction(id, value);
   } else if (button.hasAttribute('data-confirm-abort')) {
     if (button.dataset.confirm === 'yes') transmit({ type: 'abort' });
     else {
@@ -268,5 +324,12 @@ app.addEventListener('click', async (event) => {
   }
 });
 
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state?.mission?.phase === 'playing'
+    && state.mission.focusedModuleId && state.mission.modules) {
+    transmit({ type: 'inspect', missionId: state.mission.id, moduleId: null });
+  }
+});
+installKnobControls(app, inputs, () => audio.play('tick'));
 draw(true);
 connect();

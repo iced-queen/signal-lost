@@ -4,7 +4,7 @@ import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomInt } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { applyAction, createMission, DIFFICULTIES, missionForRole, tickMission } from './lib/game.js';
+import { applyAction, createMission, DIFFICULTIES, inspectModule, missionForRole, tickMission } from './lib/game.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -196,6 +196,12 @@ export function createGameServer({ maxRooms = 500, roomLifetime = 30 * 60 * 1000
           if (room.players.length !== 2 || room.players.some((member) => !member.ready || member.socket?.readyState !== WebSocket.OPEN)) throw new Error('Both players must be connected and ready.');
           room.mission = createMission(room.difficulty);
           room.players.forEach((member) => { member.ready = false; });
+        } else if (message.type === 'inspect') {
+          if (player.role !== 'operator') throw new Error('Only the operator can inspect the workstation.');
+          if (!room.mission || message.missionId !== room.mission.id) throw new Error('The mission has changed. Reconnect to the current workstation.');
+          advanceClock(room);
+          if (room.mission.phase !== 'playing') { broadcast(room); throw new Error('This transmission has ended.'); }
+          inspectModule(room.mission, message.moduleId);
         } else if (message.type === 'action') {
           if (player.role !== 'operator') throw new Error('Only the operator can use the console.');
           if (room.players.some((member) => member.socket?.readyState !== WebSocket.OPEN) || room.players.length !== 2) throw new Error('Wait for your partner to reconnect.');
@@ -205,7 +211,9 @@ export function createGameServer({ maxRooms = 500, roomLifetime = 30 * 60 * 1000
             broadcast(room);
             throw new Error('This transmission has ended. Start a new mission.');
           }
-          applyAction(room.mission, message.moduleId, message.value);
+          if (message.missionId !== room.mission.id) throw new Error('The mission has changed. Reconnect to the current workstation.');
+          if (typeof message.stage !== 'string') throw new Error('Your controls are out of date. Refresh to load the new workstation.');
+          applyAction(room.mission, message.moduleId, message.value, message.stage);
         } else if (message.type === 'lobby') {
           requireLobby(room);
           if (player.id !== room.host) throw new Error('Only the host can return the room to the lobby.');

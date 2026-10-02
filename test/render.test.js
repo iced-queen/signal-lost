@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { escapeHtml, renderHome, renderLobby, renderMission, timeLabel } from '../public/render.js';
-import { createMission, missionForRole } from '../lib/game.js';
+import { applyAction, createMission, inspectModule, missionForRole } from '../lib/game.js';
 import { renderManual } from '../public/manual.js';
 import { MODULE_NAMES } from '../public/rules.js';
+import { repairSteps } from '../test-support/repairs.js';
 
 test('player text and attributes are escaped', () => {
   assert.equal(escapeHtml('<>&"\''), '&lt;&gt;&amp;&quot;&#39;');
@@ -57,4 +58,45 @@ test('lobby and live console render without inline code or leaking hidden soluti
   const manual = renderMission(state, 'pulses', {});
   assert.match(manual, /Signal recovery manual/);
   assert.equal(manual.includes('SERIAL NUMBER'), false);
+});
+
+test('inspection renders every stage, with native controls locked until their feed is available', () => {
+  const mission = createMission('hard');
+  const state = {
+    code: 'ABC234', self: 'a', host: 'a', difficulty: 'hard', paused: false,
+    players: [{ id: 'a', name: 'Alex', role: 'operator' }, { id: 'b', name: 'Sam', role: 'reader' }],
+  };
+  inspectModule(mission, mission.modules.at(-1).id);
+  state.mission = missionForRole(mission, 'operator');
+  assert.match(renderMission(state, 'frequency', {}), /No signal feed/);
+  for (const module of mission.modules) {
+    inspectModule(mission, module.id);
+    for (const { stage, value } of repairSteps(module)) {
+      state.mission = missionForRole(mission, 'operator');
+      const html = renderMission(state, module.type, {});
+      assert.equal(html.includes('undefined'), false);
+      assert.equal(/\sstyle=|\sonclick=/.test(html), false);
+      assert.match(html, /Step back/);
+      if (module.type === 'frequency') {
+        assert.match(html, /role="slider"/);
+        assert.match(html, /CARRIER BANDWIDTH/);
+      }
+      applyAction(mission, module.id, value, stage);
+    }
+  }
+  assert.equal(mission.phase, 'won');
+});
+
+test('analyst scratchpad text is escaped and the schematic does not expose device clues', () => {
+  const mission = createMission();
+  const state = {
+    code: 'ABC234', self: 'b', host: 'a', difficulty: 'normal', paused: false,
+    players: [{ id: 'a', name: 'Alex', role: 'operator' }, { id: 'b', name: 'Sam', role: 'reader' }],
+    mission: missionForRole(mission, 'reader'),
+  };
+  const html = renderMission(state, 'glyphs', { notes: '</textarea><script>bad()</script>' });
+  assert.equal(html.includes('<script>'), false);
+  assert.equal(html.includes(mission.serial), false);
+  assert.match(html, /FEED SCHEMATIC/);
+  assert.match(html, /PRIVATE SCRATCHPAD/);
 });

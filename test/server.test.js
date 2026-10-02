@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { createGameServer } from '../server.js';
+import { repairSteps } from '../test-support/repairs.js';
 
 async function setup(t, options) {
   const game = createGameServer({ tickInterval: 50, ...options });
@@ -120,8 +121,8 @@ test('a crew can win, return to the lobby, swap roles and launch another mission
   await start(game, 'cozy');
   const mission = game.rooms.get(game.session.code).mission;
   for (const module of mission.modules) {
-    for (const value of module.type === 'glyphs' ? module.answer : [module.answer]) {
-      game.operator.send({ type: 'action', moduleId: module.id, value });
+    for (const { stage, value } of repairSteps(module)) {
+      game.operator.send({ type: 'action', missionId: mission.id, moduleId: module.id, stage, value });
     }
   }
   const won = await game.reader.next((message) => message.type === 'state' && message.mission?.phase === 'won');
@@ -241,4 +242,36 @@ test('the action deadline is authoritative even between periodic clock broadcast
   assert.equal(module.solved, false);
   const state = await game.reader.next((message) => message.type === 'state' && message.mission?.phase === 'lost');
   assert.equal(state.mission.remaining, 0);
+});
+
+test('operator inspections reach the analyst without clues; analyst inspections are rejected', async (t) => {
+  const game = await crew(t);
+  const state = await start(game);
+  const moduleId = state.mission.modules[1].id;
+  game.operator.send({ type: 'inspect', missionId: state.mission.id, moduleId });
+  const reader = await game.reader.next((message) => playing(message) && message.mission.focusedModuleId === moduleId);
+  assert.equal(reader.mission.systems.find((system) => system.id === moduleId).available, false);
+  assert.equal(Object.hasOwn(reader.mission, 'modules'), false);
+  game.reader.send({ type: 'inspect', missionId: state.mission.id, moduleId: null });
+  assert.match((await game.reader.next(type('error'))).text, /Only the operator/);
+  game.operator.send({ type: 'inspect', missionId: state.mission.id, moduleId: null });
+  await game.reader.next((message) => playing(message) && message.mission.focusedModuleId === null && message.mission.revision === 0);
+});
+
+test('stale missions, stale stages and unpowered actions never spend a strike', async (t) => {
+  const game = await crew(t);
+  await start(game);
+  const mission = game.rooms.get(game.session.code).mission;
+  const power = mission.modules[0];
+  game.operator.send({ type: 'action', missionId: 'old-mission', moduleId: power.id, stage: 'isolate', value: power.answer });
+  assert.match((await game.operator.next(type('error'))).text, /mission has changed/);
+  const final = mission.modules.at(-1);
+  game.operator.send({ type: 'action', missionId: mission.id, moduleId: final.id, stage: 'tune', value: { frequency: final.answer, bandwidth: final.secondaryAnswer } });
+  assert.match((await game.operator.next(type('error'))).text, /upstream/);
+  game.operator.send({ type: 'action', missionId: mission.id, moduleId: power.id, stage: 'isolate', value: power.answer });
+  await game.operator.next((message) => playing(message) && message.mission.revision === 1);
+  game.operator.send({ type: 'action', missionId: mission.id, moduleId: power.id, stage: 'isolate', value: power.answer });
+  assert.match((await game.operator.next(type('error'))).text, /stage has changed/);
+  assert.equal(mission.strikes, 0);
+  assert.equal(mission.revision, 1);
 });

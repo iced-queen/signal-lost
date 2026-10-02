@@ -1,9 +1,7 @@
-import { DIFFICULTIES, GLYPHS, MODULE_NAMES } from './rules.js';
-import { renderManual } from './manual.js';
-
-export const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-export const timeLabel = (seconds) => seconds === null ? '∞' : `${Math.floor(Math.ceil(seconds) / 60).toString().padStart(2, '0')}:${(Math.ceil(seconds) % 60).toString().padStart(2, '0')}`;
-export const roleName = (role) => role === 'operator' ? 'Console operator' : 'Signal analyst';
+import { DIFFICULTIES } from './rules.js';
+import { renderAnalystDesk, renderWorkstation } from './workstation.js';
+import { escapeHtml, roleName, timeLabel } from './ui.js';
+export { escapeHtml, roleName, timeLabel } from './ui.js';
 
 export function renderHome({ name, invite, stats, mode = 'create' }) {
   const receiving = mode === 'join';
@@ -54,30 +52,16 @@ export function renderLobby(state) {
     </section></div></section>`;
 }
 
-function renderModule(module, index, inputs) {
-  const disabled = module.solved ? 'disabled' : '';
-  let content;
-  if (module.type === 'wires') {
-    content = `<p class="module-hint">Five wires. One correct cut. Describe them top to bottom.</p><div class="wire-list">${module.colors.map((color, wire) => `<button class="wire-row ${color}" data-action="wire" data-module="${module.id}" data-value="${wire}" ${disabled} aria-label="Cut wire ${wire + 1}, ${color}"><span class="wire-number">${String(wire + 1).padStart(2, '0')}</span><span class="wire-line" aria-hidden="true"></span><span class="wire-label">${color}</span><span class="wire-cut">CUT</span></button>`).join('')}</div>`;
-  } else if (module.type === 'glyphs') {
-    content = `<div class="module-hint">Reference band <strong class="band">${module.band}</strong></div><div class="glyph-pad">${module.glyphs.map((glyph) => `<button class="glyph-button ${module.progress.includes(glyph) ? 'accepted' : ''}" data-action="glyph" data-module="${module.id}" data-value="${glyph}" ${module.solved || module.progress.includes(glyph) ? 'disabled' : ''} aria-label="${glyph}"><span aria-hidden="true">${GLYPHS[glyph]}</span><small>${glyph}</small>${module.progress.includes(glyph) ? `<b class="glyph-index">${module.progress.indexOf(glyph) + 1}</b>` : ''}</button>`).join('')}</div><p class="small-note">Press in the order your analyst gives you.</p>`;
-  } else if (module.type === 'pulses') {
-    content = `<p class="module-hint">Read each beacon's color and burst marks.</p><div class="beacons">${module.beacons.map((beacon, beaconIndex) => `<div class="beacon ${beacon.color}"><span>${['A', 'B', 'C'][beaconIndex]}</span><div class="burst-marks" aria-label="${beacon.count} bursts">${'<i></i>'.repeat(beacon.count)}</div><small>${beacon.color}</small></div>`).join('')}</div><form data-pulse="${module.id}" class="pulse-form"><label for="code-${module.id}">DECODED SIGNAL</label><div><input id="code-${module.id}" name="digits" type="text" inputmode="numeric" autocomplete="off" maxlength="3" pattern="[0-9]{3}" placeholder="000" required value="${escapeHtml(inputs[module.id] ?? '')}" ${disabled}><button class="button secondary" ${disabled}>Send ↗</button></div></form>`;
-  } else {
-    const value = inputs[module.id] ?? 880;
-    content = `<div class="station-label"><span>STATION CALL SIGN</span><strong>${module.station}</strong></div><div class="frequency-display"><output id="output-${module.id}">${(value / 10).toFixed(1)}</output><span>MHz</span></div><label class="sr-only" for="dial-${module.id}">Frequency in tenths of MHz</label><input id="dial-${module.id}" class="frequency-slider" type="range" min="880" max="960" step="1" value="${value}" data-dial="${module.id}" ${disabled}><div class="dial-controls">${[-10, -1, 1, 10].map((step) => `<button class="dial-step" data-step="${step}" data-module="${module.id}" ${disabled}>${step > 0 ? '+' : '−'}${(Math.abs(step) / 10).toFixed(1)}</button>`).join('')}</div><button class="button secondary wide" data-action="frequency" data-module="${module.id}" ${disabled}>Transmit frequency ↗</button>`;
-  }
-  return `<section class="console-module ${module.solved ? 'solved' : ''}" aria-label="${MODULE_NAMES[module.type]} ${index + 1}"><div class="module-top"><span class="module-number">${String(index + 1).padStart(2, '0')}</span><h3>${MODULE_NAMES[module.type]}</h3><span class="module-indicator" aria-label="${module.solved ? 'Restored' : 'Needs repair'}"></span></div>${module.solved ? '<div class="restored-label">✓ SIGNAL RESTORED</div>' : ''}${content}<div class="module-plate" aria-hidden="true">NL-04 / ${module.type.toUpperCase()} / SERVICE PANEL ${index + 1}</div></section>`;
-}
-
 export function renderMission(state, tab, inputs) {
   const self = state.players.find((player) => player.id === state.self);
   const mission = state.mission;
-  return `<section class="mission-view"><div class="mission-heading"><div><span class="eyebrow">NORTHLINE / LIVE CHANNEL ${state.code}</span><h1>${self.role === 'operator' ? 'Recovery console.' : 'Recovery desk.'}</h1></div><span class="role-pill">${roleName(self.role)}</span></div>
+  return `<section class="mission-view station-game"><div class="mission-heading"><div><span class="eyebrow">NORTHLINE / ${mission.operation.location.toUpperCase()} / CHANNEL ${state.code}</span><h1>${self.role === 'operator' ? 'Relay room.' : 'Technical desk.'}</h1></div><div class="station-tools"><span class="role-pill">${roleName(self.role)}</span><button id="audio-toggle" class="audio-switch" data-audio aria-pressed="false">Audio off</button></div></div>
+    <div class="dispatch-strip"><span>DISPATCH</span><p>${mission.operation.brief}</p></div>
     <div class="mission-dashboard"><div class="timer-block"><span class="eyebrow">${mission.remaining === null ? 'NO RUSH' : 'TRANSMISSION WINDOW'}</span><strong id="mission-timer" class="${mission.remaining !== null && mission.remaining <= 60 ? 'urgent' : ''}">${timeLabel(mission.remaining)}</strong></div><div class="progress-block"><span class="eyebrow">MODULES RESTORED</span><strong>${mission.restored}<span> / ${mission.total}</span></strong><div class="progress-track"><div class="progress-fill progress-${mission.restored}-${mission.total}"></div></div></div><div class="strike-block"><span class="eyebrow">SIGNAL INTEGRITY</span><div class="strike-lights">${Array.from({ length: mission.strikeLimit }, (_, index) => `<span class="${index < mission.strikes ? 'used' : ''}">${index < mission.strikes ? '×' : '•'}</span>`).join('')}</div><small>${mission.strikeLimit - mission.strikes} mistake${mission.strikeLimit - mission.strikes === 1 ? '' : 's'} left</small></div></div>
     <div id="pause-banner" class="pause-banner" ${state.paused ? '' : 'hidden'}>Partner disconnected. The clock is paused and controls are locked until they return.</div>
-    <div class="mission-feedback ${mission.feedback?.kind ?? ''}" role="status">${escapeHtml(mission.feedback?.text ?? 'Connection established. Describe your first module and work together.')}</div>
-    ${self.role === 'operator' ? `<section class="console-facts" aria-label="Station details"><div><span>SERIAL NUMBER</span><strong>${mission.serial}</strong></div><div><span>BATTERY CELLS</span><strong>${mission.batteries} <span aria-hidden="true">${'▰'.repeat(mission.batteries)}</span></strong></div><div><span>LINK INDICATOR</span><strong><i class="color-dot ${mission.indicator ? 'cyan' : 'off'}"></i>${mission.indicator ? 'LIT' : 'OFF'}</strong></div><p>Your analyst needs these details.<br>They can't see your screen.</p></section><fieldset class="console-fieldset" ${state.paused ? 'disabled' : ''}><legend class="sr-only">Console controls</legend><div class="console-grid">${mission.modules.map((module, index) => renderModule(module, index, inputs)).join('')}</div></fieldset>` : renderManual(tab)}
+    <div class="mission-feedback ${mission.feedback?.kind ?? ''}" role="status">${escapeHtml(mission.feedback?.text ?? 'Power bus offline. Inspect the wire junction first; your analyst has the repair procedure.')}</div>
+    ${self.role === 'operator' ? renderWorkstation(mission, inputs) : renderAnalystDesk(mission, tab, inputs)}
+    ${mission.log.length ? `<details class="repair-log"><summary>Service log / ${mission.revision} actions</summary><ol>${mission.log.map((entry) => `<li class="${entry.kind}"><span>${String(entry.revision).padStart(2, '0')}</span>${escapeHtml(entry.text)}</li>`).join('')}</ol></details>` : ''}
     <div class="mission-bottom"><span>${escapeHtml(state.players.map((player) => player.name).join(' + '))} · ${DIFFICULTIES[state.difficulty].name}</span>${state.self === state.host ? '<button class="text-button" data-confirm-abort>End this mission</button>' : ''}</div>
   </section>`;
 }
