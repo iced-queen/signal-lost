@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b151b">
+    <meta name="description" content="Two people. One fragile connection. A cooperative signal-repair game for your next date night.">
+    <title>Signal Lost — a game for two</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <div class="ambient" aria-hidden="true"></div>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Signal Lost home"><span class="brand-mark" aria-hidden="true">⌁</span> SIGNAL <span>LOST</span></a>
+      <span class="header-division">NORTHLINE / RELAY STATION 04</span>
+      <div class="header-right"><span id="connection" class="connection">Connecting…</span><button id="help-toggle" class="text-button" aria-expanded="false" aria-controls="help">How to play</button></div>
+    </header>
+    <aside id="help" class="help-panel" hidden>
+      <div><span class="eyebrow">YOUR TWO-PERSON CREW</span><h2>Good communication saves the night.</h2></div>
+      <ol><li>Start a voice call or sit together. Voice chat isn't built into the game.</li><li>Select <strong>TX / HOST</strong>, enter your call sign, and open a private channel. Send your partner its link or code. They use <strong>RX / PARTNER</strong> to connect. Keep your screens to yourselves.</li><li>The <strong>operator</strong> sees the console. The <strong>signal analyst</strong> sees the manual. Describe what you see; work out the instructions together.</li><li>Both select Ready. The host starts the mission. Restore every module before the timer or strike limit runs out.</li><li>Swap roles and try another transmission. Quiet frequency has no timer.</li></ol>
+      <p>Colors also have text labels. All controls work with touch or keyboard. A disconnected crew member pauses the mission until they return.</p>
+    </aside>
+    <div id="notice" class="notice" role="alert" hidden><span></span><button class="text-button" aria-label="Dismiss notification">Dismiss</button></div>
+    <main id="app"><div class="loading"><span class="radar" aria-hidden="true"></span><p>Finding your frequency…</p></div></main>
+    <footer class="site-footer"><span>NORTHLINE COMMUNICATIONS / RELAY 04</span><span>PRIVATE LINK · TWO-PERSON CREW</span></footer>
+  </body>
+</html>
